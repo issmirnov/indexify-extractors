@@ -47,18 +47,18 @@ def print_instructions(directory_path):
     if not os.environ.get("VIRTUAL_ENV"):
         message += f"source {venv_path}/bin/activate\n"
 
-    message += f"indexify-extractor join-server[/]"
+    message += f"indexify-extractor join-server {os.path.basename(directory_path)}.{find_extractor_subclasses(directory_path)}[/]"
     console.print(Panel(message, title="[bold magenta]Run the extractor[/]", expand=True))
-    
-    
+
+
 def install_dependencies(directory_path):
     console.print("[bold #4AA4F4]Installing dependencies...[/]")
     venv_path = os.path.join(directory_path, "ve")
     requirements_path = os.path.join(directory_path, "requirements.txt")
-    
+
     if not os.path.exists(requirements_path):
             raise ValueError("Unable to find requirements.txt")
-        
+
     if os.environ.get("VIRTUAL_ENV"):
         # install requirements to current env
         subprocess.check_call([os.path.join(os.environ.get("VIRTUAL_ENV"), 'bin', 'pip'), 'install', '-r', requirements_path])
@@ -66,7 +66,17 @@ def install_dependencies(directory_path):
         # create env and install requirements
         print("Creating virtual environment...")
         version_str = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-        subprocess.check_call(['virtualenv', '-p', f"python{version_str}", venv_path])
+        try:
+            subprocess.check_call(['virtualenv', '-p', f"python{version_str}", venv_path])
+        except FileNotFoundError as err:
+            if "virtualenv" in str(err):
+                print("command virtualenv not found, did you install it? Try 'pip install virtualenv'")
+                return
+            else:
+                raise
+        except Exception as err:
+            print(f"Unexpected {err=}, {type(err)=} while attempting to create virtual envirnment.")
+            raise
         pip_path = os.path.join(venv_path, 'bin', 'pip')
 
         subprocess.check_call([pip_path, 'install', '-r', requirements_path])
@@ -94,9 +104,9 @@ def create_extractor_db():
     # Check if the table exists
     table_name = "extractors"
     cur.execute(f"""
-        SELECT name 
-        FROM sqlite_master 
-        WHERE type='table' 
+        SELECT name
+        FROM sqlite_master
+        WHERE type='table'
         AND name='{table_name}'
     """)
 
@@ -132,9 +142,6 @@ def get_extractor_full_name(directory: str):
     name = find_extractor_subclasses(path)
     return f"{directory}.{name}"
 
-def sanitize_db_value(value: str) -> str:
-    return value.replace("'", "''")
-
 def serialize_embedding_schemas(embedding_schemas) -> str:
     schemas = {}
     for name, embedding_schema in embedding_schemas.items():
@@ -147,21 +154,22 @@ def save_extractor_description(id: str, description: ExtractorDescription):
     cur = conn.cursor()
 
     # Check if the extractor already exists
-    cur.execute("""
-        SELECT id 
-        FROM extractors 
-        WHERE id=?
-    """, [id])
+    cur.execute(f"""
+        SELECT id
+        FROM extractors
+        WHERE id='{id}'
+    """)
 
     if cur.fetchone():
         # delete the existing extractor record.
         # This is to ensure that the database is always
         # up-to-date with the latest extractor info.
-        cur.execute("""
+        cur.execute(f"""
             DELETE FROM extractors
-            WHERE id=?
-        """, [id])
+            WHERE id='{id}'
+        """)
 
+    sanitized_description = description.description.replace("'", "''")
     input_params: str = description.input_params if description.input_params else None
 
     # Convert the lists to JSON strings
@@ -170,13 +178,15 @@ def save_extractor_description(id: str, description: ExtractorDescription):
     metadata_schemas = json.dumps(description.metadata_schemas)
 
     # Insert the extractor info into the database
-    cur.execute("""
+    cur.execute(f"""
         INSERT INTO extractors (
             id, name, description, input_params, input_mime_types, metadata_schemas, embedding_schemas
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?
+            '{id}', '{description.name}', '{sanitized_description}',
+            '{input_params}', '{mime_types}',
+            '{metadata_schemas}', '{embedding_schemas}'
         )
-    """, [id, description.name, description.description, input_params, mime_types, metadata_schemas, embedding_schemas])
+    """)
 
     conn.commit()
     conn.close()
